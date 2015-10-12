@@ -32,7 +32,7 @@ define( 'ASSETS_ROOT_URI', rtrim( SITE_URI, '/' ) . '/deepwiki-assets' );
 define( 'LOGGING_LOGGED_IN', 11 );
 define( 'LOGGING_NOT_LOGGED_IN', 12 );
 define( 'LOGGING_WRONG_PASSWORD', 13 );
-
+define( 'LOGGING_WRONG_EMAIL', 14 );
 // functions
 
 function dw_uri( $path = null, $absolute = false ) {
@@ -98,7 +98,10 @@ function dw_sanitize( $string ) {
 
 function dw_go_home() {
 	global $config;
-	header( 'Location: ' . dw_uri( $config['home_route'], true ) );
+	// When deploy code with docker, it cannot get the right port. So,
+	// I hacked this tonight. Just for http connection. Don't blame me.
+	// header( 'Location: ' . dw_uri( $config['home_route'], true ) );
+	header('Location: ' .'http://' . $_SERVER['HTTP_HOST'] . dw_uri( $config['home_route']));
 	exit();
 }
 
@@ -107,12 +110,40 @@ function dw_get_logged_in_hash() {
 	return md5( md5( $config['password'] ) . ':' . $config['cookie_salt'] );
 }
 
-function dw_process_login() {
+function dw_process_login($email, $level) {
 	setcookie( 'logging', dw_get_logged_in_hash(), time() + 86400, dw_uri() );
+	setcookie( 'level', $level, time() + 86400, dw_uri() );
+	setcookie( 'email', $email, time() + 86400, dw_uri() );
+
+
 }
 
 function dw_process_logout() {
 	setcookie( 'logging', null, time() - 86400, dw_uri() );
+	setcookie( 'level', null, time() - 86400, dw_uri() );
+	setcookie( 'email', null, time() - 86400, dw_uri() );
+
+}
+
+function dw_check_login()
+{
+	if ( isset( $_COOKIE['logging'] ) ) {
+		// has logging cookie
+		$cookie_hash = $_COOKIE['logging'];
+		if ( $cookie_hash === dw_get_logged_in_hash() ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function dw_get_user_level($value, $array) {
+	foreach($array as $item) {
+		if($item['email'] === $value) {
+			return $item['level'];
+		}
+	}
+	return false;
 }
 
 // load configuration
@@ -124,6 +155,8 @@ if ( ! file_exists( $config_filename ) ) {
 $config_json = file_get_contents( $config_filename );
 $config = json_decode( $config_json, true );
 
+$user_config = file_get_contents( CONFIG_ROOT . '/user.json' );
+$users = json_decode( $user_config, true );
 if ( ! is_array( $config ) ) {
 	$config = array();
 }
@@ -198,46 +231,51 @@ foreach ( $theme_config['assets']['js'] as $entry )
 	$parts['{{html_head}}'] .= sprintf( '<script type="text/javascript" src="%s"></script>' . PHP_EOL, $theme_root_uri . '/' . $entry );
 
 $parts['{{login_form}}'] = '<form method="post" role="form">' .
+	'<div class="form-group"><label>Email</label><input type="text" name="email" class="form-control" /></div>' .
 	'<div class="form-group"><label>Password</label><input type="password" name="password" class="form-control" /></div>' .
 	'<button type="submit" class="btn btn-default">Submit</button>' .
 	'</form>';
 
-// logging
 
-$logged = LOGGING_NOT_LOGGED_IN;
-if ( ! empty( $config['password'] ) ) {
-	if ( isset( $_COOKIE['logging'] ) ) {
-		// has logging cookie
-		$cookie_hash = $_COOKIE['logging'];
-		if ( $cookie_hash === dw_get_logged_in_hash() ) {
-			$logged = LOGGING_LOGGED_IN;
-		}
-	} elseif ( isset( $_POST['password'] ) && ! empty( $_POST['password'] ) ) {
-		// post password
+
+if ( isset( $_POST['email'] ) && ! empty( $_POST['email'] ) && isset( $_POST['password'] ) && ! empty( $_POST['password'] ) ) {
+	// post email && password
+	$user_level= dw_get_user_level($_POST['email'],$users);
+	if ( $user_level ) {
 		if ( $config['password'] === $_POST['password'] ) {
-			dw_process_login();
 			$logged = LOGGING_LOGGED_IN;
 		} else {
 			$logged = LOGGING_WRONG_PASSWORD;
 		}
+	} else {
+		$logged = LOGGING_WRONG_EMAIL;
 	}
-	// show logging form
+
 	if ( LOGGING_LOGGED_IN !== $logged ) {
+
+		// wrong email
+		if ( LOGGING_WRONG_EMAIL === $logged ) {
+			$parts['{{login_form}}'] = '<div class="alert alert-danger" role="alert">Wrong Email.</div>' . $parts['{{login_form}}'];
+		}
+
 		// wrong password
 		if ( LOGGING_WRONG_PASSWORD === $logged ) {
 			$parts['{{login_form}}'] = '<div class="alert alert-danger" role="alert">Wrong password.</div>' . $parts['{{login_form}}'];
 		}
+
 		// load theme template
 		$template = file_get_contents( $theme_root . '/login.html' );
 		$output = str_replace( array_keys( $parts ), $parts, $template );
 		// output html
 		echo $output;
 		exit();
+	} else {
+		dw_process_login($_POST['email'], $user_level);
+		dw_go_home();
 	}
 }
 
 // handle request
-
 if ( empty( $query_string ) ) {
 	dw_go_home();
 }
@@ -303,11 +341,12 @@ if ( empty( $docs_index ) ) :
 	} );
 
 else :
-
 	// read from docs configuration
 	function _walk_config_docs_tree( $docs, &$items, $parent = '' ) {
 		$i = 1;
+
 		foreach ( $docs as $slug => $item ) {
+
 			$item = array_merge( array(
 				'title'    => null,
 				'file'     => null,
@@ -322,18 +361,19 @@ else :
 				'type'     => dw_doc_file_type( $item['file'] ),
 				'depth'    => substr_count( $parent, '.' ) + 1,
 				'parent'   => $parent,
+				'level'    => isset($item['level']) ? $item['level'] : 1
 			);
 			if ( ! empty( $item['children'] ) )
 				_walk_config_docs_tree( $item['children'], $items, $chapter );
 			$i ++;
 		}
 	}
+
 	_walk_config_docs_tree( $docs_index, $items );
 
 endif;
 
 // generate paths
-
 foreach ( array_keys( $items ) as $k ) {
 	if ( 'url' === $items[ $k ]['type'] ) {
 		$items[ $k ]['path'] = $items[ $k ]['filename'];
@@ -358,10 +398,31 @@ foreach ( array_keys( $items ) as $k ) {
 require_once ( VENDOR_ROOT . '/erusev/parsedown/Parsedown.php' );
 require_once ( VENDOR_ROOT . '/erusev/parsedown-extra/ParsedownExtra.php' );
 
-// compile document content
 
+// compile document content
 foreach ( $items as $entry ) {
 	if ( $entry['path'] === $query_string ) {
+		if ($entry['level'] > 1) {
+			if(!dw_check_login()) {
+				// load theme template
+				$template = file_get_contents( $theme_root . '/login.html' );
+				$parts['{{login_form}}'] = '<div class="alert alert-danger" role="alert">抱歉，没有权限，请先登录</div>' . $parts['{{login_form}}'];
+				$output = str_replace( array_keys( $parts ), $parts, $template );
+				// output html
+				echo $output;
+				exit();
+			}else {
+				$user_level = dw_get_user_level($_COOKIE['email'], $users);
+				if ($user_level < $entry['level'] ) {
+					// load theme template
+					$template = file_get_contents( $theme_root . '/forbidden.html' );
+					$output = str_replace( array_keys( $parts ), $parts, $template );
+					// output html
+					echo $output;
+					exit();
+				}
+			}
+		}
 		$origin = file_get_contents( DOCS_ROOT . '/' . $entry['filename'] );
 		switch ( $entry['type'] ) {
 			case 'markdown':
@@ -403,8 +464,9 @@ foreach ( $items as $entry ) {
 		);
 		break;
 	}
-}
 
+
+}
 // 404
 
 if ( ! isset( $doc ) ) {
@@ -564,10 +626,13 @@ $parts['{{nav}}'] .= $output_nav;
 $parts['{{nav}}'] .= '</div>';
 
 // load theme template
-
 $template = file_get_contents( $theme_root . '/index.html' );
 $output = str_replace( array_keys( $parts ), $parts, $template );
 
+
+function check_auth() {
+
+}
 // output html
 
 echo $output;
