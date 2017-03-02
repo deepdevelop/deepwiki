@@ -139,6 +139,7 @@ class Deepwiki {
 				$type = $this->docFileType( $filename );
 				if ( false === $type )
 					continue;
+				$time = filemtime( DOCS_ROOT . '/' . $filename );
 				$filename_pure = substr( $filename, 0, strrpos( $filename, '.' ) );
 				$matches = array();
 				preg_match_all( '#^(([0-9a-z]+\.)+\ +)?(.+?)(\ +\[(\S+)\])?$#', $filename_pure, $matches );
@@ -155,7 +156,7 @@ class Deepwiki {
 					$parent = '';
 				else
 					$parent = implode( '.', $chapter_tree ) . '.';
-				$this->docs_items[] = compact( 'title', 'slug', 'chapter', 'filename', 'type', 'depth', 'parent' );
+				$this->docs_items[] = compact( 'title', 'slug', 'chapter', 'filename', 'type', 'time', 'depth', 'parent' );
 			}
 
 			// sort by chapter
@@ -197,6 +198,7 @@ class Deepwiki {
 						'chapter'  => $chapter,
 						'filename' => $item['file'],
 						'type'     => $this->docFileType( $item['file'] ),
+						'time'     => filemtime( DOCS_ROOT . '/' . $item['file'] ),
 						'depth'    => substr_count( $parent, '.' ) + 1,
 						'parent'   => $parent,
 					);
@@ -334,6 +336,7 @@ class Deepwiki {
 				'slug'     => $entry['slug'],
 				'chapter'  => $entry['chapter'],
 				'filename' => $entry['filename'],
+				'time'     => $entry['time'],
 				'content'  => $content,
 			);
 			break;
@@ -485,6 +488,7 @@ class Deepwiki {
 		$this->template->setPart( 'doc_title'  , $this->queried_docs['title'] );
 		$this->template->setPart( 'doc_heading', ( $this->config['display_chapter'] ? $this->queried_docs['chapter'] . ' ' : null ) . $this->queried_docs['title'] );
 		$this->template->setPart( 'doc_content', $this->queried_docs['content'] );
+		$this->template->setPart( 'doc_time'  , date( 'j F Y', $this->queried_docs['time'] ) );
 
 		if ( self::AUTH_LOGGED_IN == $this->authenticated ) {
 			$this->template->setPart( 'logout_link', sprintf( '<a href="%s">Logout</a>', $this->uri( '_logout' ) ) );
@@ -688,6 +692,7 @@ class DeepwikiTemplate {
 			->setPart( 'doc_heading'     , '' )
 			->setPart( 'doc_content'     , '' )
 			->setPart( 'doc_index'       , '' )
+			->setPart( 'doc_time'        , '' )
 			->setPart( 'copyright'       , '' )
 			->setPart( 'body_footer'     , '' )
 			->setPart( 'login_form'      , '' )
